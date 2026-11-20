@@ -5,7 +5,7 @@ on:
 permissions:
   contents: read
 env:
-  SOURCE_REF: acbb998af2628aed2775bae5d4bc924f81d1ec55
+  SOURCE_REF: 8a026587b3602bdaf4e0cce6fac85a29458a8f7b
 jobs:
   build:
     runs-on: xcode-27
