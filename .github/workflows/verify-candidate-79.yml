@@ -1,0 +1,74 @@
+name: macOS 26 install from candidate artifact
+on:
+  push:
+    branches: [ci/macos26-verify-79]
+permissions:
+  contents: read
+  actions: read
+env:
+  SOURCE_REF: 01e5c35b0af478c60fcd8d5cf965ef43c60af995
+jobs:
+  verify:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_REF }}
+      - name: 使用 macOS 26 ARM64 验收和封装
+        run: |
+          test "$(uname -m)" = arm64
+          test "$(sw_vers -productVersion | cut -d. -f1)" = 26
+          sudo xcode-select -s /Applications/Xcode_26.6.app/Contents/Developer
+
+      - name: 核对版本与更新说明
+        run: |
+          version="$(tr -d '[:space:]' < VERSION)"
+          build="$(tr -d '[:space:]' < BUILD_NUMBER)"
+          test -s RELEASE_NOTES.md
+          grep -Fq "${version}" RELEASE_NOTES.md
+          grep -Fq "## ${version} (${build})" CHANGELOG.md
+
+      - name: 缓存本地语音识别运行时
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build/bootstrap-cache
+            Frameworks/whisper.xcframework
+            Models/ggml-small-q5_1.bin
+            Licenses/whisper.cpp-LICENSE.txt
+          key: chenggao-runtime-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('script/bootstrap_runtime.sh') }}
+
+      - name: 准备并校验语音识别运行时
+        run: ./script/bootstrap_runtime.sh
+
+      - name: 测试
+        run: swift test -Xswiftc -warnings-as-errors
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: app-for-macos26
+          run-id: 44769623010
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/built-app
+      - name: 生成并验证 DMG
+        run: |
+          mkdir -p dist
+          ditto -x -k "$RUNNER_TEMP/built-app/ChengGao.zip" dist
+          ./script/package_dmg.sh --prebuilt
+          version="$(tr -d '[:space:]' < VERSION)"
+          dmg="ChengGao-${version}-macOS-arm64.dmg"
+          legacy_dmg="澄稿-${version}-macOS-arm64.dmg"
+
+          # 历史标签仍使用中文产物名；手动重跑旧标签时统一转换为
+          # GitHub Release 可稳定保留的 ASCII 文件名。
+          if [[ ! -f "dist/${dmg}" && -f "dist/${legacy_dmg}" ]]; then
+            mv "dist/${legacy_dmg}" "dist/${dmg}"
+          fi
+
+          (cd dist && shasum -a 256 "${dmg}" > "${dmg}.sha256")
+          hdiutil verify "dist/${dmg}"
+          (cd dist && shasum -a 256 -c "${dmg}.sha256")
+
+      - name: 在 macOS 26 从 DMG 安装并启动
+        run: ./script/install_local.sh "dist/ChengGao-$(cat VERSION)-macOS-arm64.dmg"
+
